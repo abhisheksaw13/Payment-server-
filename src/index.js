@@ -16,7 +16,7 @@ const PORT = process.env.PORT || 3000;
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
-  : ['http://localhost:3000'];
+  : ['https://payment-server-s6l2.onrender.com'];
 
 app.use(
   cors({
