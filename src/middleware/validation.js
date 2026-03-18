@@ -1,72 +1,50 @@
 const { body, param, validationResult } = require('express-validator');
 
-/**
- * Extract validation errors and respond with 422 if any.
- */
-const handleValidationErrors = (req, res, next) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(422).json({
-      success: false,
-      message: 'Validation failed',
-      errors: errors.array(),
-    });
-  }
-  return next();
-};
-
 const validateCreateOrder = [
   body('customerName')
     .trim()
-    .notEmpty()
-    .withMessage('Customer name is required')
-    .isLength({ max: 100 })
-    .withMessage('Customer name must not exceed 100 characters'),
-
+    .notEmpty().withMessage('Customer name is required')
+    .isLength({ max: 100 }).withMessage('Name must be less than 100 characters'),
+  
   body('customerEmail')
     .trim()
-    .notEmpty()
-    .withMessage('Customer email is required')
-    .isEmail()
-    .withMessage('Invalid email address')
-    .normalizeEmail(),
-
+    .isEmail().withMessage('Valid email is required'),
+  
   body('customerPhone')
     .trim()
-    .notEmpty()
-    .withMessage('Customer phone is required')
-    // E.164-style: optional leading +, 8–15 total digits (covers all international formats)
-    .matches(/^\+?[1-9]\d{7,14}$/)
-    .withMessage('Invalid phone number'),
-
+    .matches(/^[0-9]{10}$/).withMessage('Phone must be 10 digits'),
+  
   body('amount')
-    .notEmpty()
-    .withMessage('Amount is required')
-    .isFloat({ min: 1 })
-    .withMessage('Amount must be a positive number greater than or equal to 1'),
-
+    .isFloat({ min: 1 }).withMessage('Amount must be at least 1'),
+  
   body('currency')
     .optional()
-    .isAlpha()
-    .isLength({ min: 3, max: 3 })
-    .withMessage('Currency must be a 3-letter ISO code'),
-
-  handleValidationErrors,
+    .isIn(['INR', 'USD']).withMessage('Invalid currency'),
+  
+  (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+    next();
+  }
 ];
 
 const validateOrderId = [
   param('orderId')
     .trim()
-    .notEmpty()
-    .withMessage('Order ID is required')
-    .isAlphanumeric('en-US', { ignore: '-_' })
-    .withMessage('Invalid order ID format'),
-
-  handleValidationErrors,
+    .notEmpty().withMessage('Order ID is required'),
+  
+  (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+    next();
+  }
 ];
 
 module.exports = {
   validateCreateOrder,
   validateOrderId,
-  handleValidationErrors,
 };
