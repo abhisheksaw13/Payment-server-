@@ -5,6 +5,8 @@ document.addEventListener('DOMContentLoaded', function() {
   const mobileInput = document.getElementById('mobileNumber');
   const submitBtn = document.getElementById('submitBtn');
 
+  let selectedAmount = null;
+
   // Amount button selection
   amountBtns.forEach(btn => {
     btn.addEventListener('click', function(e) {
@@ -17,7 +19,8 @@ document.addEventListener('DOMContentLoaded', function() {
       this.classList.add('active');
       
       // Set hidden input value
-      amountInput.value = this.getAttribute('data-amount');
+      selectedAmount = this.getAttribute('data-amount');
+      amountInput.value = selectedAmount;
       
       // Clear error
       document.getElementById('amountError').textContent = '';
@@ -29,51 +32,69 @@ document.addEventListener('DOMContentLoaded', function() {
     e.preventDefault();
 
     const mobileNumber = mobileInput.value.trim();
-    const amount = amountInput.value;
+    const amount = selectedAmount;
 
     // Validation
-    if (!mobileNumber || mobileNumber.length !== 10) {
-      document.getElementById('mobileError').textContent = 'Enter valid 10-digit mobile number';
-      return;
+    let hasError = false;
+    
+    if (!mobileNumber || mobileNumber.length !== 10 || !/^[0-9]{10}$/.test(mobileNumber)) {
+      document.getElementById('mobileError').textContent = '❌ Enter valid 10-digit mobile number';
+      hasError = true;
+    } else {
+      document.getElementById('mobileError').textContent = '';
     }
 
     if (!amount) {
-      document.getElementById('amountError').textContent = 'Please select an amount';
-      return;
+      document.getElementById('amountError').textContent = '❌ Please select an amount';
+      hasError = true;
+    } else {
+      document.getElementById('amountError').textContent = '';
     }
+
+    if (hasError) return;
 
     // Show loading state
     submitBtn.disabled = true;
     document.getElementById('btnText').classList.add('hidden');
     document.getElementById('btnSpinner').classList.remove('hidden');
+    document.getElementById('formError').classList.add('hidden');
 
     try {
-      // Call backend to generate payment link
-      const response = await fetch('/api/generate-payment-link', {
+      // Call backend to create order
+      const response = await fetch('/api/orders', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          mobileNumber: mobileNumber,
-          amount: amount
+          customerName: 'User',
+          customerEmail: `user${mobileNumber}@payment.local`,
+          customerPhone: mobileNumber,
+          amount: parseFloat(amount),
+          currency: 'INR'
         })
       });
 
       const data = await response.json();
 
-      if (data.success && data.paymentLink) {
-        // Redirect to payment gateway
-        window.location.href = data.paymentLink;
+      if (data.success && data.data.paymentSessionId) {
+        // Initialize Cashfree checkout
+        const cashfree = window.Cashfree({
+          mode: 'production' // Change to 'sandbox' for testing
+        });
+
+        cashfree.checkout({
+          paymentSessionId: data.data.paymentSessionId,
+          redirectTarget: '_self'
+        });
       } else {
-        document.getElementById('formError').textContent = data.message || 'Error generating payment link';
-        document.getElementById('formError').classList.remove('hidden');
+        throw new Error(data.message || 'Failed to create order');
       }
     } catch (error) {
-      document.getElementById('formError').textContent = 'Something went wrong. Please try again.';
+      document.getElementById('formError').textContent = '❌ ' + (error.message || 'Something went wrong. Please try again.');
       document.getElementById('formError').classList.remove('hidden');
       console.error('Error:', error);
-    } finally {
+      
       submitBtn.disabled = false;
       document.getElementById('btnText').classList.remove('hidden');
       document.getElementById('btnSpinner').classList.add('hidden');
