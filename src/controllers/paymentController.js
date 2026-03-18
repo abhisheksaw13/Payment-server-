@@ -1,128 +1,3 @@
-const Order = require('../models/Order');
-const PaymentTransaction = require('../models/PaymentTransaction');
-const cashfreeService = require('../services/cashfreeService');
-const { ORDER_STATUS, PAYMENT_STATUS } = require('../config/cashfree');
-const { generateId } = require('../utils/idGenerator');
-const logger = require('../config/logger');
-
-/**
- * POST /api/orders
- * Create a new payment order and initialize it with Cashfree.
- */
-const createOrder = async (req, res, next) => {
-  try {
-    const { customerName, customerEmail, customerPhone, amount, currency = 'INR' } = req.body;
-
-    const orderId = generateId('order');
-    const customerId = generateId('cust');
-
-    const returnUrl =
-      process.env.PAYMENT_SUCCESS_URL || `${process.env.APP_BASE_URL || 'http://localhost:3000'}/success.html`;
-
-    const cashfreePayload = {
-      order_id: orderId,
-      order_amount: parseFloat(amount),
-      order_currency: currency.toUpperCase(),
-      customer_details: {
-        customer_id: customerId,
-        customer_name: customerName,
-        customer_email: customerEmail,
-        customer_phone: customerPhone,
-      },
-      order_meta: {
-        return_url: `${returnUrl}?order_id=${orderId}`,
-      },
-    };
-
-    const cashfreeResponse = await cashfreeService.createCashfreeOrder(cashfreePayload);
-    logger.info('Cashfree order created', {
-      order_id: cashfreeResponse.order_id,
-      payment_session_id: cashfreeResponse.payment_session_id,
-      order_status: cashfreeResponse.order_status,
-    });
-
-    if (!cashfreeResponse.payment_session_id) {
-      logger.error('Cashfree response missing payment_session_id', cashfreeResponse);
-      throw new Error('Failed to obtain payment session from Cashfree');
-    }
-
-    const order = new Order({
-      orderId,
-      amount: parseFloat(amount),
-      currency: currency.toUpperCase(),
-      status: ORDER_STATUS.CREATED,
-      customerDetails: {
-        customerId,
-        customerName,
-        customerEmail,
-        customerPhone,
-      },
-      cashfreeOrderId: cashfreeResponse.order_id,
-      paymentSessionId: cashfreeResponse.payment_session_id,
-      orderMeta: {
-        returnUrl: cashfreePayload.order_meta.return_url,
-      },
-    });
-
-    await order.save();
-    logger.info(`Order created: ${orderId}`);
-
-    return res.status(201).json({
-      success: true,
-      message: 'Order created successfully',
-      data: {
-        orderId: order.orderId,
-        amount: order.amount,
-        currency: order.currency,
-        status: order.status,
-        paymentSessionId: order.paymentSessionId,
-        cashfreeOrderId: order.cashfreeOrderId,
-      },
-    });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-/**
- * GET /api/orders/:orderId
- * Retrieve a stored order and optionally refresh its status from Cashfree.
- */
-const getOrder = async (req, res, next) => {
-  try {
-    const { orderId } = req.params;
-
-    const order = await Order.findOne({ orderId });
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found',
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        orderId: order.orderId,
-        amount: order.amount,
-        currency: order.currency,
-        status: order.status,
-        customerDetails: order.customerDetails,
-        cashfreeOrderId: order.cashfreeOrderId,
-        paymentSessionId: order.paymentSessionId,
-        createdAt: order.createdAt,
-        updatedAt: order.updatedAt,
-      },
-    });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-/**
- * POST /api/payments/webhook
- * Handle Cashfree webhook callbacks with signature verification.
- */
 const handleWebhook = async (req, res, next) => {
   try {
     const signature = req.headers['x-webhook-signature'];
@@ -135,7 +10,19 @@ const handleWebhook = async (req, res, next) => {
       });
     }
 
-    const rawBody = req.rawBody;
+    // Get raw body from request
+    let rawBody;
+    if (Buffer.isBuffer(req.body)) {
+      rawBody = req.body.toString('utf8');
+    } else if (typeof req.body === 'string') {
+      rawBody = req.body;
+    } else {
+      rawBody = JSON.stringify(req.body);
+    }
+
+    // Store raw body for webhook verification
+    req.rawBody = rawBody;
+
     const isValid = cashfreeService.verifyWebhookSignature(rawBody, signature, timestamp);
     if (!isValid) {
       logger.warn('Invalid webhook signature received');
@@ -145,7 +32,8 @@ const handleWebhook = async (req, res, next) => {
       });
     }
 
-    const event = req.body;
+    // Parse body if it's a string
+    const event = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const eventType = event.type;
     const eventData = event.data || {};
 
@@ -202,63 +90,4 @@ const handleWebhook = async (req, res, next) => {
   } catch (err) {
     return next(err);
   }
-};
-
-/**
- * POST /api/payments/verify
- * Verify payment completion by checking Cashfree for latest order status.
- */
-const verifyPayment = async (req, res, next) => {
-  try {
-    const { orderId } = req.body;
-
-    if (!orderId) {
-      return res.status(400).json({
-        success: false,
-        message: 'orderId is required',
-      });
-    }
-
-    const order = await Order.findOne({ orderId });
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Order not found',
-      });
-    }
-
-    const cashfreeOrder = await cashfreeService.getCashfreeOrder(order.cashfreeOrderId);
-    const cfStatus = cashfreeOrder.order_status;
-
-    let newStatus = order.status;
-    if (cfStatus === 'PAID') newStatus = ORDER_STATUS.PAID;
-    else if (cfStatus === 'EXPIRED') newStatus = ORDER_STATUS.EXPIRED;
-    else if (cfStatus === 'ACTIVE') newStatus = ORDER_STATUS.CREATED;
-
-    if (newStatus !== order.status) {
-      order.status = newStatus;
-      await order.save();
-      logger.info(`Order ${orderId} status updated to ${newStatus} via verify`);
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        orderId: order.orderId,
-        status: order.status,
-        amount: order.amount,
-        currency: order.currency,
-        cashfreeStatus: cfStatus,
-      },
-    });
-  } catch (err) {
-    return next(err);
-  }
-};
-
-module.exports = {
-  createOrder,
-  getOrder,
-  handleWebhook,
-  verifyPayment,
 };
